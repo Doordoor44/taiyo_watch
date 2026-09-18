@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>太陽ウォッチ Prototype</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f9;color:#222}
+main{max-width:720px;margin:auto;padding:20px}
+h1{margin-bottom:4px}.sub{color:#666}
+.card{background:white;border-radius:16px;padding:16px;margin:14px 0;box-shadow:0 2px 10px #00000012}
+button{border:0;border-radius:12px;padding:12px 16px;font-size:16px;margin:4px;cursor:pointer}
+.primary{background:#222;color:white}.warn{background:#eee}
+.big{font-size:32px;font-weight:700}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.metric{background:#f1f3f5;padding:12px;border-radius:10px}
+.reticle{height:220px;border-radius:14px;background:#18202a;display:flex;align-items:center;justify-content:center;color:white;position:relative}
+.reticle:before{content:"";width:80px;height:80px;border:2px solid white;border-radius:50%;position:absolute}
+.small{font-size:13px;color:#666}
+pre{white-space:pre-wrap;background:#111;color:#eee;padding:12px;border-radius:10px;overflow:auto}
+.ok{color:green}.bad{color:#b00020}
+</style>
+</head>
+<body>
+<main>
+<h1>☀️ 太陽ウォッチ</h1>
+<div class="sub">iPhone / Android 対応・センサー検証プロトタイプ</div>
+
+<div class="card">
+  <div id="status">センサー未開始</div>
+  <button class="primary" id="start">センサーを開始</button>
+  <button id="cal">現在の向きを基準にする</button>
+  <p class="small">iPhoneではSafariのHTTPSページで開き、「センサーを開始」を押してモーション/方位の許可をしてください。</p>
+</div>
+
+<div class="card">
+<h2>📱 センサー状態</h2>
+<div class="grid">
+<div class="metric">方位角<br><span class="big" id="az">---</span>°</div>
+<div class="metric">高度角<br><span class="big" id="alt">---</span>°</div>
+<div class="metric">alpha<br><span id="alpha">---</span>°</div>
+<div class="metric">beta<br><span id="beta">---</span>°</div>
+<div class="metric">gamma<br><span id="gamma">---</span>°</div>
+<div class="metric">方位の取得元<br><span id="source">---</span></div>
+</div>
+</div>
+
+<div class="card">
+<h2>☀️ 太陽の観測</h2>
+<div class="reticle">太陽を中央の円に合わせる</div>
+<p id="guide">センサーを開始してください。</p>
+<button class="primary" id="observe">観測する</button>
+</div>
+
+<div class="card">
+<h2>📍 推定結果（プロトタイプ）</h2>
+<div id="result">まだ観測していません。</div>
+</div>
+
+<div class="card">
+<h2>🧪 端末差・傾き検証</h2>
+<p class="small">同じ方向を向いたまま、水平→30°→45°→60°→80°と傾けて比較してください。</p>
+<pre id="log">---</pre>
+</div>
+</main>
+
+<script>
+let alpha=NaN,beta=NaN,gamma=NaN,az=NaN,alt=NaN;
+let offset=0,started=false,samples=[],lastLog=0,source="---";
+
+function norm(x){return (x%360+360)%360;}
+
+function calculate(){
+  // iPhone Safari provides webkitCompassHeading on DeviceOrientationEvent
+  // when available. It is the preferred absolute compass heading.
+  let raw=NaN;
+  if(Number.isFinite(window._webkitHeading)){
+    raw=window._webkitHeading;
+    source="iPhoneコンパス";
+  }else if(Number.isFinite(alpha)){
+    raw=alpha;
+    source="alpha（参考値）";
+  }
+
+  az=Number.isFinite(raw)?norm(raw-offset):NaN;
+
+  // Diagnostic altitude proxy only. Production version should calculate
+  // attitude using a full sensor-fusion/coordinate transform.
+  alt=Number.isFinite(beta)?Math.max(-90,Math.min(90,90-Math.abs(beta))):NaN;
+
+  document.querySelector("#az").textContent=Number.isFinite(az)?az.toFixed(1):"---";
+  document.querySelector("#alt").textContent=Number.isFinite(alt)?alt.toFixed(1):"---";
+  document.querySelector("#alpha").textContent=Number.isFinite(alpha)?alpha.toFixed(1):"---";
+  document.querySelector("#beta").textContent=Number.isFinite(beta)?beta.toFixed(1):"---";
+  document.querySelector("#gamma").textContent=Number.isFinite(gamma)?gamma.toFixed(1):"---";
+  document.querySelector("#source").textContent=source;
+
+  if(Number.isFinite(beta)){
+    const t=Math.abs(beta);
+    const guide=document.querySelector("#guide");
+    if(t>=55){
+      guide.innerHTML='<span class="bad">⚠ 大きく傾いています。方位角は参考値として扱います。</span>';
+    }else if(t>=35){
+      guide.innerHTML='<span>△ 45°付近：方位角の急変をチェックしてください。</span>';
+    }else{
+      guide.innerHTML='<span class="ok">○ 姿勢は比較的安定しています。</span>';
+    }
+  }
+
+  const now=Date.now();
+  if(now-lastLog>500 && Number.isFinite(az)){
+    lastLog=now;
+    samples.push({a:alpha,b:beta,g:gamma,az,src:source});
+    if(samples.length>12)samples.shift();
+    document.querySelector("#log").textContent=samples.map((s,i)=>
+      `${String(i+1).padStart(2,"0")} alpha=${s.a.toFixed(1)} beta=${s.b.toFixed(1)} gamma=${s.g.toFixed(1)} az=${s.az.toFixed(1)} [${s.src}]`
+    ).join("\n");
+  }
+}
+
+function handle(e){
+  if(e.alpha!=null)alpha=e.alpha;
+  if(e.beta!=null)beta=e.beta;
+  if(e.gamma!=null)gamma=e.gamma;
+
+  // iOS Safari's compass heading is degrees clockwise from true north.
+  if(e.webkitCompassHeading!=null && Number.isFinite(e.webkitCompassHeading)){
+    window._webkitHeading=e.webkitCompassHeading;
+  }
+  calculate();
+}
+
+async function startSensor(){
+  try{
+    if(!window.isSecureContext){
+      throw new Error("HTTPS（またはlocalhost）で開いてください。iPhoneではHTTPではセンサーを取得できません。");
+    }
+    if(typeof DeviceOrientationEvent==="undefined"){
+      throw new Error("このブラウザはDeviceOrientationEventに対応していません。");
+    }
+
+    if(typeof DeviceOrientationEvent.requestPermission==="function"){
+      const p=await DeviceOrientationEvent.requestPermission();
+      if(p!=="granted") throw new Error("モーション/方位センサーの許可が拒否されました。Safariの設定を確認してください。");
+    }
+
+    window.addEventListener("deviceorientation",handle,true);
+    started=true;
+    document.querySelector("#status").textContent="センサー取得中";
+    document.querySelector("#status").className="ok";
+  }catch(err){
+    document.querySelector("#status").textContent=err.message;
+    document.querySelector("#status").className="bad";
+  }
+}
+
+document.querySelector("#start").onclick=startSensor;
+
+document.querySelector("#cal").onclick=()=>{
+  if(!started || !Number.isFinite(az)){
+    alert("先にセンサーを開始してください。");
+    return;
+  }
+  // Calibration is useful for testing device-specific offset.
+  offset=Number.isFinite(window._webkitHeading)?window._webkitHeading:alpha;
+  alert("現在の向きを0°として基準化しました。");
+  calculate();
+};
+
+document.querySelector("#observe").onclick=()=>{
+  if(!started || !Number.isFinite(az)){
+    alert("先にセンサーを開始してください。");
+    return;
+  }
+  const confidence=Number.isFinite(beta)
+    ?Math.max(0,Math.min(100,Math.round(100-Math.abs(Math.abs(beta)-20)*2))):0;
+  const warning=Number.isFinite(beta)&&Math.abs(beta)>=35
+    ?"スマホの傾きが大きいため、方位角の信頼度を下げています。"
+    :"姿勢条件は比較的安定しています。";
+
+  document.querySelector("#result").innerHTML=
+    `<p><b>観測方位角：</b>${az.toFixed(1)}°</p>`+
+    `<p><b>観測高度角（参考値）：</b>${alt.toFixed(1)}°</p>`+
+    `<p><b>姿勢ベースの信頼度：</b>${confidence}%</p>`+
+    `<p>${warning}</p>`+
+    `<p class="small">この試作版では、1回の観測から都道府県を断定しません。複数観測、日時、天文計算、端末差補正を組み合わせる前提です。</p>`;
+};
+</script>
+</body>
+</html>
